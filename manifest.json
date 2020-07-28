@@ -1,0 +1,31 @@
+{
+  "required_api_version": "^2.0.0",
+  "name": "Clockify Extension",
+  "description": "Create new time entries in your clockify project",
+  "developer_name": "n4n0",
+  "icon": "images/icon.png",
+  "options": {
+    "query_debounce": 0.1
+  },
+  "preferences": [
+    {
+      "id": "kewyword",
+      "type": "keyword",
+      "name": "Clockify",
+      "description": "Create new time entries in your clockify project",
+      "default_value": "clock"
+    },
+    {
+      "id": "api_key",
+      "type": "input",
+      "name": "API Key",
+      "description": "Your Clockify API key generated at https://clockify.me/user/settings"
+    },
+    {
+      "id": "project_id",
+      "type": "input",
+      "name": "Project Id",
+      "description": "Your default project to create new entries in, found at https://clockify.me/projects"
+    }
+  ]
+}

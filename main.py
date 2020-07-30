@@ -2,6 +2,7 @@ import json
 import requests
 import webbrowser
 import os
+import re
 import gi
 
 gi.require_version('Notify', '0.7')
@@ -85,9 +86,12 @@ class KeywordQueryEventListener(EventListener):
 
 class ItemEventListener(EventListener):
 
-    def NotificationAction(self, message):
+    def NotificationAction(self, title, message, mode):
         Notify.init('ClockifyExtension')
-        Notify.Notification.new('Clockify', message).show()
+        notif = Notify.Notification.new(title, '\n' + message, cwd + '/images/icon.png')
+        if mode == 'error':
+            notif.set_urgency(2)
+        notif.show()
 
     def getTime(self, time):
         rawTime = timezone(time).localize(datetime.now())
@@ -120,12 +124,11 @@ class ItemEventListener(EventListener):
             }
             startResponse = requests.post(apiBaseUrl + '/workspaces/' + workspaceId + '/time-entries', headers=reqHeader, json=newPayload)
             if startResponse.status_code == 201:
-                return self.NotificationAction('Started time entry for ' + data['message'])
+                return self.NotificationAction('Started time entry', data['message'], 'start')
             else:
                 print(newPayload)
-                return self.NotificationAction('Could not create new entry: HTTP ' + str(startResponse.status_code))
+                return self.NotificationAction('Could not create new entry', 'HTTP ' + str(startResponse.status_code), 'error')
         elif data['call'] == 'resume':
-            # TODO fetch last used time entry's description
             resumePayload = {
                 'description': timeEntries[0]['description'],
                 'start': self.getTime(userTz),
@@ -133,20 +136,23 @@ class ItemEventListener(EventListener):
             }
             resumeResponse = requests.post(apiBaseUrl + '/workspaces/' + workspaceId + '/time-entries', headers=reqHeader, json=resumePayload)
             if resumeResponse.status_code == 201:
-                return self.NotificationAction('Resuming time entry "' + timeEntries[0]['description'] + '"')
+                return self.NotificationAction('Resuming time entry', timeEntries[0]['description'], 'start')
             else:
                 print(resumePayload)
-                return self.NotificationAction('Could not create new entry: HTTP ' + str(resumeResponse.status_code))
+                return self.NotificationAction('Could not create new entry', 'HTTP ' + str(resumeResponse.status_code), 'error')
         elif data['call'] == 'end':
             stopPayload = {
                 'end': self.getTime(userTz)
             }
             stopResponse = requests.patch(apiBaseUrl + '/workspaces/' + workspaceId + '/user/' + userId + '/time-entries', headers=reqHeader, json=stopPayload)
             if stopResponse.status_code == 200:
-                return self.NotificationAction('Stopped time tracking')
+                responseDecode = json.loads(stopResponse.content.decode('utf-8'))
+                stopDescription = responseDecode['description']
+                stopTime = responseDecode['timeInterval']['duration'][2:]
+                return self.NotificationAction('Stopped time tracking', stopDescription + ' (Clocked: '+ stopTime + ')', 'stop')
             else:
                 print(stopPayload)
-                return self.NotificationAction('Who said you could stop? HTTP ' + str(stopResponse.status_code) + ': Get back to work!')
+                return self.NotificationAction('Who said you could stop?', 'HTTP ' + str(stopResponse.status_code) + ': Get back to work!', 'error')
 
 
 if __name__ == '__main__':

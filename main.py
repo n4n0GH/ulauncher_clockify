@@ -9,6 +9,7 @@ gi.require_version('Notify', '0.7')
 
 from gi.repository import Notify
 from datetime import datetime
+from dateutil.parser import parse
 from pytz import timezone
 from ulauncher.api.client.Extension import Extension
 from ulauncher.api.client.EventListener import EventListener
@@ -72,6 +73,15 @@ class KeywordQueryEventListener(EventListener):
                 description='Stops tracking and writes recorded time to Clockify API',
                 on_enter=ExtensionCustomAction({
                     'call': 'end'
+                })
+            ))
+        if str(query).split(' ')[0] == 'status':
+            items.insert(0, ExtensionResultItem(
+                icon='images/icon.png',
+                name='Status of current tracking',
+                description='Get the name and the duration of the currently running tracking',
+                on_enter=ExtensionCustomAction({
+                    'call': 'status'
                 })
             ))
 
@@ -153,6 +163,25 @@ class ItemEventListener(EventListener):
             else:
                 print(stopPayload)
                 return self.NotificationAction('Who said you could stop?', 'HTTP ' + str(stopResponse.status_code) + ': Get back to work!', 'error')
+        elif data['call'] == 'status':
+            statusResponse = requests.get(apiBaseUrl + '/workspaces/' + workspaceId + '/user/' + userId + '/time-entries/?in-progress=true', headers=reqHeader)
+            if statusResponse.status_code == 200:
+                timeEntries = json.loads(statusResponse.content.decode('utf-8'))
+
+                if (len(timeEntries) == 0):
+                    return self.NotificationAction('There is no currently running time entry.', 'Get back to work!', 'status')
+                else:
+                    currentDescription = timeEntries[0]['description']
+                    currentStart = parse(timeEntries[0]['timeInterval']['start'])
+                    now = datetime.now(timezone('UTC'))
+                    duration = now - currentStart
+                    duration_in_s = duration.total_seconds()
+                    hours = divmod(duration_in_s,3600)
+                    minutes = divmod(hours[1],60)
+                    clockedText = "%iH%iM" % (hours[0], minutes[0])
+                    return self.NotificationAction('Current time tracking', currentDescription + ' (Clocked: ' + clockedText + ')', 'status')
+            else:
+                return self.NotificationAction('Who said you could stop?', 'HTTP ' + str(statusResponse.status_code) + ': Get back to work!', 'error')
 
 
 if __name__ == '__main__':

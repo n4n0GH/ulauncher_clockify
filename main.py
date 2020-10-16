@@ -23,11 +23,8 @@ from ulauncher.api.shared.action.ExtensionCustomAction import ExtensionCustomAct
 
 
 # define some fixed globals
-apiBaseUrl = 'https://api.clockify.me/api/v1'
-trackerUrl = 'https://clockify.me/tracker'
-cwd = os.path.dirname(__file__)
-recoveryFile = os.path.join(cwd, 'recovery.json')
-clockFile = os.path.join(cwd, 'clock.json')
+api_base_url = 'https://api.clockify.me/api/v1'
+tracker_url = 'https://clockify.me/tracker'
 
 
 class ClockifyExtension(Extension):
@@ -43,8 +40,6 @@ class KeywordQueryEventListener(EventListener):
     def on_event(self, event, extension):
         items = []
         query = event.get_argument()
-        projectId = extension.preferences.get('project_id')
-        apiKey = extension.preferences.get('api_key')
 
         if str(query).split(' ')[0] == 'in':
             items.insert(0, ExtensionResultItem(
@@ -89,99 +84,191 @@ class KeywordQueryEventListener(EventListener):
             icon='images/icon.png',
             name='Open time tracker',
             description='Opens Clockify website in your webbrowser',
-            on_enter=OpenUrlAction(url=trackerUrl)
+            on_enter=OpenUrlAction(url=tracker_url)
         ))
+
         return RenderResultListAction(items)
 
 
 class ItemEventListener(EventListener):
 
-    def NotificationAction(self, title, message, mode):
+    def notification_action(self, title, message, mode):
         Notify.init('ClockifyExtension')
-        notif = Notify.Notification.new(title, '\n' + message, cwd + '/images/icon.png')
+        notif = Notify.Notification.new(title, f"\n{message}", f"{os.path.dirname(__file__)}/images/icon.png")
         if mode == 'error':
             notif.set_urgency(2)
         notif.show()
 
-    def getTime(self, time):
-        rawTime = timezone(time).localize(datetime.now())
-        localizedTime = str(rawTime.astimezone(timezone('UTC')))[0:-6] + 'Z'
-        splitTime = localizedTime.split(' ')
-        splitTime.insert(1, 'T')
-        return ''.join(splitTime)
+
+    def get_now(self):
+        raw_time = timezone(self.__user['time_zone']).localize(datetime.now())
+        localized_time = str(raw_time.astimezone(timezone('UTC')))[0:-6] + 'Z'
+        split_time = localized_time.split(' ')
+        split_time.insert(1, 'T')
+
+        return ''.join(split_time)
+
+
+    def extract_tags(self, message):
+        # (?<!\\\) -> negative lookahead, allow for # espcaping. \#abc won't be picked up as a tag
+        # #(\w+\-_) -> match tag as one word made out of letters, numbers, -, or _.
+        # \s? -> optionally match space after the tag to avoid two spaces when tag in the middle of the message
+        reg_exp = "(?<!\\\)#([\w\-_]+)\s?"
+
+        tags = re.findall(reg_exp, message)
+        tags = list(dict.fromkeys(tags)) # remove duplicate tags
+        message = re.sub(reg_exp, "", message)
+
+        return message, tags
+
+
+    def find_existing_tags(self):
+        response = requests.get(f"{self.__base_workspace_url}/tags", headers=self.__headers)
+
+        return json.loads(response.content.decode('utf-8'))
+
+
+    def create_tag(self, name):
+        payload = {
+            'name': name
+        }
+        response = requests.post(f"{self.__base_workspace_url}/tags", json=payload, headers=self.__headers)
+        if response.status_code == 201:
+            new_tag = json.loads(response.content.decode('utf-8'))
+
+            return new_tag['id']
+        else:
+            print(f"Failed to create tag '{name}'; Error: {response.status_code}")
+
+
+    def process_message(self, message):
+        (message, tags) = self.extract_tags(message)
+        if (len(tags) == 0):
+            return message, []
+
+        existing_tags = self.find_existing_tags()
+        matched_tags = list(filter(lambda et : et['name'] in tags, existing_tags))
+
+        matched_tag_names = map(lambda mt: mt['name'], matched_tags)
+        tag_ids = list(map(lambda mt: mt['id'], matched_tags))
+
+        for tag in tags:
+            if tag in matched_tag_names:
+                continue # tag exists, tagId is already known
+            else:
+                tag_ids.append(self.create_tag(tag))
+
+        return message, tag_ids
+
+
+    def get_last_time_entry(self):
+        response = requests.get(f"{self.__base_workspace_url}/user/{self.__user['id']}/time-entries?page-size=1", headers=self.__headers)
+        time_entries = json.loads(response.content.decode('utf-8'))
+
+        return time_entries[0]
+
+
+    def get_user(self):
+        response = requests.get(api_base_url + '/user', headers=self.__headers)
+        user = json.loads(response.content.decode('utf-8'))
+
+        return {
+            'id': user['id'],
+            'time_zone': user['settings']['timeZone'],
+            'default_workspace': user['defaultWorkspace']
+        }
+
+
+    def start_time_entry(self, message):
+        (description, tag_ids) = self.process_message(message)
+        payload = {
+            'description': description,
+            'tagIds': tag_ids,
+            'start': self.get_now(),
+            'projectId': self.__project_id
+        }
+        response = requests.post(f"{self.__base_workspace_url}/time-entries", json=payload, headers=self.__headers)
+        if response.status_code == 201:
+            return self.notification_action('Started time entry', description, 'start')
+        else:
+            return self.notification_action('Could not create new entry', f"Error: HTTP {response.status_code}", 'error')
+
+
+    def resume_time_entry(self):
+        last_time_entry = self.get_last_time_entry()
+        payload = {
+            'description': last_time_entry['description'],
+            'tagIds': last_time_entry['tagIds'],
+            'start': self.get_now(),
+            'projectId': self.__project_id
+        }
+        response = requests.post(f"{self.__base_workspace_url}/time-entries", json=payload, headers=self.__headers)
+        if response.status_code == 201:
+            return self.notification_action('Resuming time entry', last_time_entry['description'], 'start')
+        else:
+            return self.notification_action('Could not create new entry', f"Error: HTTP {response.status_code}", 'error')
+
+
+    def end_time_entry(self):
+        payload = {
+            'end': self.get_now()
+        }
+        response = requests.patch(f"{self.__base_workspace_url}/user/{self.__user['id']}/time-entries", json=payload, headers=self.__headers)
+        if response.status_code == 200:
+            data = json.loads(response.content.decode('utf-8'))
+            stop_description = data['description']
+            stop_time = data['timeInterval']['duration'][2:]
+            return self.notification_action('Stopped time tracking', f"{stop_description} (Clocked: {stop_time})", 'stop')
+        elif response.status_code == 404:
+            return self.notification_action('There is currently no running time entry', 'Get back to work!', 'error')
+        else:
+            return self.notification_action('Unexpected error', f"HTTP {response.status_code}", 'error')
+
+
+    def status_of_time_entry(self):
+        response = requests.get(f"{self.__base_workspace_url}/user/{self.__user['id']}/time-entries/?in-progress=true", headers=self.__headers)
+        if response.status_code == 200:
+            time_entries = json.loads(response.content.decode('utf-8'))
+
+            if (len(time_entries) == 0):
+                return self.notification_action('There is no currently running time entry', 'Get back to work!', 'status')
+            else:
+                current_description = time_entries[0]['description']
+                current_start = parse(time_entries[0]['timeInterval']['start'])
+                now = datetime.now(timezone('UTC'))
+                duration = now - current_start
+                duration_in_s = duration.total_seconds()
+                hours = divmod(duration_in_s,3600)
+                minutes = divmod(hours[1],60)
+                clocked_text = "%iH%iM" % (hours[0], minutes[0])
+                return self.notification_action('Current time tracking', f"{current_description} (Clocked: {clocked_text})", 'status')
+        else:
+            return self.notification_action('Unexpected error', f"HTTP {response.status_code}", 'error')
+
 
     def on_event(self, event, extension):
-        # oh lawd help me I have no idea what I'm doing
-        reqHeader = {
+        self.__headers = {
             'content-type': 'application/json',
             'X-Api-Key': extension.preferences.get('api_key')
         }
-        userResponse = requests.get(apiBaseUrl + '/user', headers=reqHeader)
-        user = json.loads(userResponse.content.decode('utf-8'))
-        userId = user['id']
-        userTz = user['settings']['timeZone']
-        workspaceId = user['defaultWorkspace']
-        workspaceResponse = requests.get(apiBaseUrl + '/workspaces/' + workspaceId + '/user/' + userId + '/time-entries', headers=reqHeader)
-        timeEntries = json.loads(workspaceResponse.content.decode('utf-8'))
+        self.__project_id = extension.preferences.get('project_id')
+        self.__user = self.get_user()
+        self.__base_workspace_url = f"{api_base_url}/workspaces/{self.__user['default_workspace']}"
 
-        data = event.get_data()
+        call = event.get_data().get('call')
+        message = event.get_data().get('message', '')
 
-        if data['call'] == 'new':
-            newPayload = {
-                'description': data['message'],
-                'start': self.getTime(userTz),
-                'projectId': extension.preferences.get('project_id')
-            }
-            startResponse = requests.post(apiBaseUrl + '/workspaces/' + workspaceId + '/time-entries', headers=reqHeader, json=newPayload)
-            if startResponse.status_code == 201:
-                return self.NotificationAction('Started time entry', data['message'], 'start')
-            else:
-                print(newPayload)
-                return self.NotificationAction('Could not create new entry', 'HTTP ' + str(startResponse.status_code), 'error')
-        elif data['call'] == 'resume':
-            resumePayload = {
-                'description': timeEntries[0]['description'],
-                'start': self.getTime(userTz),
-                'projectId': extension.preferences.get('project_id')
-            }
-            resumeResponse = requests.post(apiBaseUrl + '/workspaces/' + workspaceId + '/time-entries', headers=reqHeader, json=resumePayload)
-            if resumeResponse.status_code == 201:
-                return self.NotificationAction('Resuming time entry', timeEntries[0]['description'], 'start')
-            else:
-                print(resumePayload)
-                return self.NotificationAction('Could not create new entry', 'HTTP ' + str(resumeResponse.status_code), 'error')
-        elif data['call'] == 'end':
-            stopPayload = {
-                'end': self.getTime(userTz)
-            }
-            stopResponse = requests.patch(apiBaseUrl + '/workspaces/' + workspaceId + '/user/' + userId + '/time-entries', headers=reqHeader, json=stopPayload)
-            if stopResponse.status_code == 200:
-                responseDecode = json.loads(stopResponse.content.decode('utf-8'))
-                stopDescription = responseDecode['description']
-                stopTime = responseDecode['timeInterval']['duration'][2:]
-                return self.NotificationAction('Stopped time tracking', stopDescription + ' (Clocked: '+ stopTime + ')', 'stop')
-            else:
-                print(stopPayload)
-                return self.NotificationAction('Who said you could stop?', 'HTTP ' + str(stopResponse.status_code) + ': Get back to work!', 'error')
-        elif data['call'] == 'status':
-            statusResponse = requests.get(apiBaseUrl + '/workspaces/' + workspaceId + '/user/' + userId + '/time-entries/?in-progress=true', headers=reqHeader)
-            if statusResponse.status_code == 200:
-                timeEntries = json.loads(statusResponse.content.decode('utf-8'))
+        if call == 'new':
+            return self.start_time_entry(message)
 
-                if (len(timeEntries) == 0):
-                    return self.NotificationAction('There is no currently running time entry.', 'Get back to work!', 'status')
-                else:
-                    currentDescription = timeEntries[0]['description']
-                    currentStart = parse(timeEntries[0]['timeInterval']['start'])
-                    now = datetime.now(timezone('UTC'))
-                    duration = now - currentStart
-                    duration_in_s = duration.total_seconds()
-                    hours = divmod(duration_in_s,3600)
-                    minutes = divmod(hours[1],60)
-                    clockedText = "%iH%iM" % (hours[0], minutes[0])
-                    return self.NotificationAction('Current time tracking', currentDescription + ' (Clocked: ' + clockedText + ')', 'status')
-            else:
-                return self.NotificationAction('Who said you could stop?', 'HTTP ' + str(statusResponse.status_code) + ': Get back to work!', 'error')
+        elif call == 'resume':
+            return self.resume_time_entry()
+
+        elif call == 'end':
+            return self.end_time_entry()
+
+        elif call == 'status':
+            return self.status_of_time_entry()
 
 
 if __name__ == '__main__':

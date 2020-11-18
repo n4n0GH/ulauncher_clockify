@@ -26,6 +26,17 @@
       "type": "input",
       "name": "Project Id",
       "description": "Your default project to create new entries in, found at https://clockify.me/projects"
+    },
+    {
+      "id": "notifications_level",
+      "type": "select",
+      "name": "Notifications",
+      "default_value": "all",
+      "description": "Use system notifications for everything or disable start/stop notifications (but still notify errors and on-demand status)",
+      "options": [
+        {"text": "All", "value": "all"},
+        {"text": "Errors and status only", "value": "errors_and_status"}
+      ]
     }
   ]
 }

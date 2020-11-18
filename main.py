@@ -93,6 +93,9 @@ class KeywordQueryEventListener(EventListener):
 class ItemEventListener(EventListener):
 
     def notification_action(self, title, message, mode):
+        if self.__notifications_level == 'errors_and_status' and mode != 'error' and mode != 'status':
+            return
+
         Notify.init('ClockifyExtension')
         notif = Notify.Notification.new(title, f"\n{message}", f"{os.path.dirname(__file__)}/images/icon.png")
         if mode == 'error':
@@ -252,6 +255,7 @@ class ItemEventListener(EventListener):
             'X-Api-Key': extension.preferences.get('api_key')
         }
         self.__project_id = extension.preferences.get('project_id')
+        self.__notifications_level = extension.preferences.get('notifications_level')
         self.__user = self.get_user()
         self.__base_workspace_url = f"{api_base_url}/workspaces/{self.__user['default_workspace']}"
 

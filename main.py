@@ -1,4 +1,5 @@
 import json
+import logging
 import requests
 import webbrowser
 import os
@@ -91,6 +92,7 @@ class KeywordQueryEventListener(EventListener):
 
 
 class ItemEventListener(EventListener):
+    logger = logging.getLogger(__name__)
 
     def notification_action(self, title, message, mode):
         if self.__notifications_level == 'errors_and_status' and mode != 'error' and mode != 'status':
@@ -124,11 +126,14 @@ class ItemEventListener(EventListener):
 
         return message, tags
 
+    def get_tag_by_name(self, name):
+        response = requests.get(f"{self.__base_workspace_url}/tags?name={name}", headers=self.__headers)
+        data = json.loads(response.content.decode('utf-8'))
 
-    def find_existing_tags(self):
-        response = requests.get(f"{self.__base_workspace_url}/tags", headers=self.__headers)
-
-        return json.loads(response.content.decode('utf-8'))
+        if response.status_code == 200:
+            return data[0] if len(data) > 0 else None
+        else:
+            raise RuntimeError(f"Failed to get tag by name '{name}'; Error: {response.status_code}")
 
 
     def create_tag(self, name):
@@ -137,11 +142,9 @@ class ItemEventListener(EventListener):
         }
         response = requests.post(f"{self.__base_workspace_url}/tags", json=payload, headers=self.__headers)
         if response.status_code == 201:
-            new_tag = json.loads(response.content.decode('utf-8'))
-
-            return new_tag['id']
+            return json.loads(response.content.decode('utf-8'))
         else:
-            print(f"Failed to create tag '{name}'; Error: {response.status_code}")
+            raise RuntimeError(f"Failed to create tag '{name}'; Error: {response.status_code}")
 
 
     def process_message(self, message):
@@ -149,17 +152,16 @@ class ItemEventListener(EventListener):
         if (len(tags) == 0):
             return message, []
 
-        existing_tags = self.find_existing_tags()
-        matched_tags = list(filter(lambda et : et['name'] in tags, existing_tags))
+        tag_ids = []
 
-        matched_tag_names = map(lambda mt: mt['name'], matched_tags)
-        tag_ids = list(map(lambda mt: mt['id'], matched_tags))
+        for tag_name in tags:
+            tag = self.get_tag_by_name(tag_name)
+            if tag is None:
+                self.logger.debug(f'Creating tag {tag_name}')
+                tag = self.create_tag(tag_name)
 
-        for tag in tags:
-            if tag in matched_tag_names:
-                continue # tag exists, tagId is already known
-            else:
-                tag_ids.append(self.create_tag(tag))
+            self.logger.debug(f"Tag {tag_name}({tag['id']}) will be attached to time entry")
+            tag_ids.append(tag['id'])
 
         return message, tag_ids
 
@@ -183,13 +185,20 @@ class ItemEventListener(EventListener):
 
 
     def start_time_entry(self, message):
-        (description, tag_ids) = self.process_message(message)
+        try:
+            (description, tag_ids) = self.process_message(message)
+        except RuntimeError as e:
+            return self.notification_action('Unexpected error', f"{e}", 'error')
+
         payload = {
             'description': description,
             'tagIds': tag_ids,
             'start': self.get_now(),
             'projectId': self.__project_id
         }
+
+        self.logger.debug("Starting time entry: %s", payload)
+
         response = requests.post(f"{self.__base_workspace_url}/time-entries", json=payload, headers=self.__headers)
         if response.status_code == 201:
             return self.notification_action('Started time entry', description, 'start')

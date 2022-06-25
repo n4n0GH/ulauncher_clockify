@@ -26,17 +26,22 @@ Now hit the 'Save' button on top and you're all set up!
 ## Usage
 Invoke the extension with the default keyword `clock`.
 
-Basic command structure is like so: `clock (in <args>|out|status)`.
+Basic command structure is like so: `clock (in[ <title>|out[ <title>]|status)`.
+
+`<title>` can contain tags. For example `clock in #call foo` will create a new time entry with the title `foo` and assign the `call` tag to it. If you need to use `#` in the title you can escape it by `\#`. Tag name is one word which can contain letters, numbers, `-`, and `_`. You can use multiple tags, it doesn't matter where in the title you use them. 
 
 ### Creating new time entries
 Using `clock in` will fetch the title and tags of your most recent time entry and re-use that.
 
 `clock in foo` will create a new time entry with the title `foo`.
 
-💡 You can also use tags for example `clock in #call foo` will create a new time entry with the title `foo` and assign the `call` tag to it. If you need to use `#` in the title you can escape it by `\#`. Tag name is one word which can contain letters, numbers, `-`, and `_`. You can use multiple tags and it doesn't matter where in the title you use them. 
+ 
 
 ### Stopping time entries
-`clock out` will stop any ongoing time trackings. This takes no further arguments.
+`clock out` will stop any ongoing time tracking.
+
+`clock out <title>` will update the title (and tags) before stopping the ongoing time tracking. This is useful because sometimes the title of the entry is only clear at the end of it. 
+
 
 ### Status of current time entry
 `clock status` will show you the title and duration fo your currently running time entry.

@@ -80,13 +80,13 @@ class KeywordQueryEventListener(EventListener):
                         'message': description
                     })
                 ))
-        if str(query).split(' ')[0] == 'status':
+        if str(query).split(' ')[0] == 'info':
             items.insert(0, ExtensionResultItem(
                 icon='images/icon.png',
-                name='Status of current tracking',
+                name='Current tracking info',
                 description='Get the name and the duration of the currently running tracking',
                 on_enter=ExtensionCustomAction({
-                    'call': 'status'
+                    'call': 'info'
                 })
             ))
 
@@ -290,7 +290,7 @@ class ItemEventListener(EventListener):
             raise RuntimeError(response.status_code)
 
 
-    def status_of_time_entry(self):
+    def current_time_entry_info(self):
         try:
             time_entry = self.get_running_time_entry()
         except ValueError:
@@ -333,8 +333,8 @@ class ItemEventListener(EventListener):
         elif call == 'end_with_update':
             return self.end_time_entry_with_update(message)
 
-        elif call == 'status':
-            return self.status_of_time_entry()
+        elif call == 'info':
+            return self.current_time_entry_info()
 
 
 if __name__ == '__main__':

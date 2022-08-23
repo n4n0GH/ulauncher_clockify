@@ -1,6 +1,6 @@
 import json
+import logging
 import requests
-import webbrowser
 import os
 import re
 import gi
@@ -16,7 +16,6 @@ from ulauncher.api.client.EventListener import EventListener
 from ulauncher.api.shared.event import KeywordQueryEvent
 from ulauncher.api.shared.event import ItemEnterEvent
 from ulauncher.api.shared.item.ExtensionResultItem import ExtensionResultItem
-from ulauncher.api.shared.action.HideWindowAction import HideWindowAction
 from ulauncher.api.shared.action.OpenUrlAction import OpenUrlAction
 from ulauncher.api.shared.action.RenderResultListAction import RenderResultListAction
 from ulauncher.api.shared.action.ExtensionCustomAction import ExtensionCustomAction
@@ -70,13 +69,24 @@ class KeywordQueryEventListener(EventListener):
                     'call': 'end'
                 })
             ))
-        if str(query).split(' ')[0] == 'status':
+            if len(str(query).split(' ')) > 1:
+                description = str(query).partition(' ')[2]
+                items.insert(0, ExtensionResultItem(
+                    icon='images/icon_stop.png',
+                    name=description,
+                    description='Stop tracking and update title',
+                    on_enter=ExtensionCustomAction({
+                        'call': 'end_with_update',
+                        'message': description
+                    })
+                ))
+        if str(query).split(' ')[0] == 'info':
             items.insert(0, ExtensionResultItem(
                 icon='images/icon.png',
-                name='Status of current tracking',
+                name='Current tracking info',
                 description='Get the name and the duration of the currently running tracking',
                 on_enter=ExtensionCustomAction({
-                    'call': 'status'
+                    'call': 'info'
                 })
             ))
 
@@ -91,6 +101,7 @@ class KeywordQueryEventListener(EventListener):
 
 
 class ItemEventListener(EventListener):
+    logger = logging.getLogger(__name__)
 
     def notification_action(self, title, message, mode):
         if self.__notifications_level == 'errors_and_status' and mode != 'error' and mode != 'status':
@@ -124,11 +135,14 @@ class ItemEventListener(EventListener):
 
         return message, tags
 
+    def get_tag_by_name(self, name):
+        response = requests.get(f"{self.__base_workspace_url}/tags?name={name}", headers=self.__headers)
+        data = json.loads(response.content.decode('utf-8'))
 
-    def find_existing_tags(self):
-        response = requests.get(f"{self.__base_workspace_url}/tags", headers=self.__headers)
-
-        return json.loads(response.content.decode('utf-8'))
+        if response.status_code == 200:
+            return data[0] if len(data) > 0 else None
+        else:
+            raise RuntimeError(f"Failed to get tag by name '{name}'; Error: {response.status_code}")
 
 
     def create_tag(self, name):
@@ -137,11 +151,9 @@ class ItemEventListener(EventListener):
         }
         response = requests.post(f"{self.__base_workspace_url}/tags", json=payload, headers=self.__headers)
         if response.status_code == 201:
-            new_tag = json.loads(response.content.decode('utf-8'))
-
-            return new_tag['id']
+            return json.loads(response.content.decode('utf-8'))
         else:
-            print(f"Failed to create tag '{name}'; Error: {response.status_code}")
+            raise RuntimeError(f"Failed to create tag '{name}'; Error: {response.status_code}")
 
 
     def process_message(self, message):
@@ -149,17 +161,16 @@ class ItemEventListener(EventListener):
         if (len(tags) == 0):
             return message, []
 
-        existing_tags = self.find_existing_tags()
-        matched_tags = list(filter(lambda et : et['name'] in tags, existing_tags))
+        tag_ids = []
 
-        matched_tag_names = map(lambda mt: mt['name'], matched_tags)
-        tag_ids = list(map(lambda mt: mt['id'], matched_tags))
+        for tag_name in tags:
+            tag = self.get_tag_by_name(tag_name)
+            if tag is None:
+                self.logger.debug(f'Creating tag {tag_name}')
+                tag = self.create_tag(tag_name)
 
-        for tag in tags:
-            if tag in matched_tag_names:
-                continue # tag exists, tagId is already known
-            else:
-                tag_ids.append(self.create_tag(tag))
+            self.logger.debug(f"Tag {tag_name}({tag['id']}) will be attached to time entry")
+            tag_ids.append(tag['id'])
 
         return message, tag_ids
 
@@ -183,13 +194,20 @@ class ItemEventListener(EventListener):
 
 
     def start_time_entry(self, message):
-        (description, tag_ids) = self.process_message(message)
+        try:
+            (description, tag_ids) = self.process_message(message)
+        except RuntimeError as e:
+            return self.notification_action('Unexpected error', f"{e}", 'error')
+
         payload = {
             'description': description,
             'tagIds': tag_ids,
             'start': self.get_now(),
             'projectId': self.__project_id
         }
+
+        self.logger.debug("Starting time entry: %s", payload)
+
         response = requests.post(f"{self.__base_workspace_url}/time-entries", json=payload, headers=self.__headers)
         if response.status_code == 201:
             return self.notification_action('Started time entry', description, 'start')
@@ -228,25 +246,66 @@ class ItemEventListener(EventListener):
             return self.notification_action('Unexpected error', f"HTTP {response.status_code}", 'error')
 
 
-    def status_of_time_entry(self):
-        response = requests.get(f"{self.__base_workspace_url}/user/{self.__user['id']}/time-entries/?in-progress=true", headers=self.__headers)
+    def end_time_entry_with_update(self, message):
+        try:
+            time_entry = self.get_running_time_entry()
+        except ValueError:
+            return self.notification_action('There is no currently running time entry', 'Get back to work!', 'status')
+        except RuntimeError as e:
+            return self.notification_action('Unexpected error', f"HTTP {e}", 'error')
+
+        try:
+            (description, tag_ids) = self.process_message(message)
+        except RuntimeError as e:
+            return self.notification_action('Unexpected error', f"{e}", 'error')
+
+        payload = {
+            'description': description,
+            'tagIds': tag_ids,
+            'projectId': self.__project_id,
+            'start': time_entry['timeInterval']['start'],
+            'end': self.get_now(),
+        }
+        response = requests.put(f"{self.__base_workspace_url}/time-entries/{time_entry['id']}", json=payload, headers=self.__headers)
+        if response.status_code == 200:
+            data = json.loads(response.content.decode('utf-8'))
+            stop_description = data['description']
+            stop_time = data['timeInterval']['duration'][2:]
+            return self.notification_action('Updated title and stopped time tracking', f"{stop_description} (Clocked: {stop_time})", 'stop')
+        else:
+            return self.notification_action('Could not stop time tracking', f"Error: HTTP {response.status_code}", 'error')
+
+
+    def get_running_time_entry(self):
+        response = requests.get(f"{self.__base_workspace_url}/user/{self.__user['id']}/time-entries/?in-progress=true",
+                                headers=self.__headers)
         if response.status_code == 200:
             time_entries = json.loads(response.content.decode('utf-8'))
 
             if (len(time_entries) == 0):
-                return self.notification_action('There is no currently running time entry', 'Get back to work!', 'status')
+                raise ValueError('There is no currently running time entry')
             else:
-                current_description = time_entries[0]['description']
-                current_start = parse(time_entries[0]['timeInterval']['start'])
-                now = datetime.now(timezone('UTC'))
-                duration = now - current_start
-                duration_in_s = duration.total_seconds()
-                hours = divmod(duration_in_s,3600)
-                minutes = divmod(hours[1],60)
-                clocked_text = "%iH%iM" % (hours[0], minutes[0])
-                return self.notification_action('Current time tracking', f"{current_description} (Clocked: {clocked_text})", 'status')
+                return time_entries[0]
         else:
-            return self.notification_action('Unexpected error', f"HTTP {response.status_code}", 'error')
+            raise RuntimeError(response.status_code)
+
+
+    def current_time_entry_info(self):
+        try:
+            time_entry = self.get_running_time_entry()
+        except ValueError:
+            return self.notification_action('There is no currently running time entry', 'Get back to work!', 'status')
+        except RuntimeError as e:
+            return self.notification_action('Unexpected error', f"HTTP {e}", 'error')
+
+        current_description = time_entry['description']
+        current_start = parse(time_entry['timeInterval']['start'])
+        duration = datetime.now(timezone('UTC')) - current_start
+        hours = divmod(duration.total_seconds(), 3600)
+        minutes = divmod(hours[1], 60)
+        clocked_text = "%iH%iM" % (hours[0], minutes[0])
+
+        return self.notification_action(f"Current time tracking", f"{current_description} (Clocked: {clocked_text})", 'status')
 
 
     def on_event(self, event, extension):
@@ -271,8 +330,11 @@ class ItemEventListener(EventListener):
         elif call == 'end':
             return self.end_time_entry()
 
-        elif call == 'status':
-            return self.status_of_time_entry()
+        elif call == 'end_with_update':
+            return self.end_time_entry_with_update(message)
+
+        elif call == 'info':
+            return self.current_time_entry_info()
 
 
 if __name__ == '__main__':

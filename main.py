@@ -289,7 +289,7 @@ class ItemEventListener(EventListener):
         payload = {
             'description': description,
             'tagIds': tag_ids,
-            'projectId': project_id if project_id != None else self.__project_id,
+            'projectId': project_id if project_id != None else time_entry['projectId'],
             'start': time_entry['timeInterval']['start'],
             'end': self.get_now(),
         }

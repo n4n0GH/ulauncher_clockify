@@ -181,7 +181,8 @@ class ItemEventListener(EventListener):
 
     def process_message(self, message):
         (message, project_name) = self.extract_project(message)
-        if project_name:
+        project_id = None
+        if project_name != None:
             project_id = self.get_project_id_by_name(project_name)
 
         (message, tags) = self.extract_tags(message)
@@ -249,7 +250,7 @@ class ItemEventListener(EventListener):
             'description': last_time_entry['description'],
             'tagIds': last_time_entry['tagIds'],
             'start': self.get_now(),
-            'projectId': self.__project_id
+            'projectId': last_time_entry['projectId']
         }
         response = requests.post(f"{self.__base_workspace_url}/time-entries", json=payload, headers=self.__headers)
         if response.status_code == 201:

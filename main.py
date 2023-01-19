@@ -163,7 +163,8 @@ class ItemEventListener(EventListener):
         data = json.loads(response.content.decode('utf-8'))
 
         if response.status_code == 200:
-            return data[0].id if len(data) > 0 else None
+            print(data[0])
+            return data[0]['id'] if len(data) > 0 else None
         else:
             raise RuntimeError(f"Failed to get project id by name '{name}'; Error: {response.status_code}")
 
@@ -171,6 +172,8 @@ class ItemEventListener(EventListener):
         reg_exp = "(?<!\\\)@([\w\-_]+)\s?"
 
         project = re.search(reg_exp, message)
+        if project == None:
+            return message, None
         project = project.group(1)
         message = re.sub(reg_exp, "", message)
 

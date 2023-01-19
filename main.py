@@ -156,10 +156,8 @@ class ItemEventListener(EventListener):
             raise RuntimeError(f"Failed to create tag '{name}'; Error: {response.status_code}")
 
     def get_project_id_by_name(self, name):
-        payload = {
-            'name': name
-        }
-        response = requests.get(f"{self.__base_workspace_url}/projects", json=payload, headers=self.__headers)
+        
+        response = requests.get(f"{self.__base_workspace_url}/projects?name={name}", headers=self.__headers)
         data = json.loads(response.content.decode('utf-8'))
 
         if response.status_code == 200:

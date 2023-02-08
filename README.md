@@ -30,17 +30,19 @@ Basic command structure is like so: `clock (in[ <title>|out[ <title>]|status)`.
 
 `<title>` can contain tags. For example `clock in #call foo` will create a new time entry with the title `foo` and assign the `call` tag to it. If you need to use `#` in the title you can escape it by `\#`. Tag name is one word which can contain letters, numbers, `-`, and `_`. You can use multiple tags, it doesn't matter where in the title you use them. 
 
-### Creating new time entries
-Using `clock in` will fetch the title and tags of your most recent time entry and re-use that.
+`<title>` can contain a project name. For example `clock in foo @project` will create a new time entry with the title `foo` in the project `project`. If you need to use `@` in the title, you can escape it by `\@`. The project name is case insensitive and does not suppport spaces. The first matching project will be choosen, so letters from the end of the project name can be left out. However, beware of projects starting with the same letters.
 
-`clock in foo` will create a new time entry with the title `foo`.
+### Creating new time entries
+Using `clock in` will fetch the title, tags and project of your most recent time entry and re-use that.
+
+`clock in foo` will create a new time entry with the title `foo` in your default project.
 
  
 
 ### Stopping time entries
 `clock out` will stop any ongoing time tracking.
 
-`clock out <title>` will update the title (and tags) before stopping the ongoing time tracking. This is useful because sometimes the title of the entry is only clear at the end of it. 
+`clock out <title>` will update the title (and project and tags) before stopping the ongoing time tracking. This is useful because sometimes the title of the entry is only clear at the end of it. 
 
 
 ### Status of current time entry

@@ -155,11 +155,38 @@ class ItemEventListener(EventListener):
         else:
             raise RuntimeError(f"Failed to create tag '{name}'; Error: {response.status_code}")
 
+    def get_project_id_by_name(self, name):
+        
+        response = requests.get(f"{self.__base_workspace_url}/projects?name={name}", headers=self.__headers)
+        data = json.loads(response.content.decode('utf-8'))
+
+        if response.status_code == 200:
+            print(data[0])
+            return data[0]['id'] if len(data) > 0 else None
+        else:
+            raise RuntimeError(f"Failed to get project id by name '{name}'; Error: {response.status_code}")
+
+    def extract_project(self, message):
+        reg_exp = "(?<!\\\)@([\w\-_]+)\s?"
+
+        project = re.search(reg_exp, message)
+        if project == None:
+            return message, None
+        project = project.group(1)
+        message = re.sub(reg_exp, "", message)
+
+        return message, project
 
     def process_message(self, message):
+        (message, project_name) = self.extract_project(message)
+        project_id = None
+        if project_name != None:
+            project_id = self.get_project_id_by_name(project_name)
+
         (message, tags) = self.extract_tags(message)
+
         if (len(tags) == 0):
-            return message, []
+            return message, [], project_id
 
         tag_ids = []
 
@@ -172,7 +199,7 @@ class ItemEventListener(EventListener):
             self.logger.debug(f"Tag {tag_name}({tag['id']}) will be attached to time entry")
             tag_ids.append(tag['id'])
 
-        return message, tag_ids
+        return message, tag_ids, project_id
 
 
     def get_last_time_entry(self):
@@ -195,7 +222,7 @@ class ItemEventListener(EventListener):
 
     def start_time_entry(self, message):
         try:
-            (description, tag_ids) = self.process_message(message)
+            (description, tag_ids, project_id) = self.process_message(message)
         except RuntimeError as e:
             return self.notification_action('Unexpected error', f"{e}", 'error')
 
@@ -203,7 +230,7 @@ class ItemEventListener(EventListener):
             'description': description,
             'tagIds': tag_ids,
             'start': self.get_now(),
-            'projectId': self.__project_id
+            'projectId': project_id if project_id != None else self.__project_id,
         }
 
         self.logger.debug("Starting time entry: %s", payload)
@@ -221,7 +248,7 @@ class ItemEventListener(EventListener):
             'description': last_time_entry['description'],
             'tagIds': last_time_entry['tagIds'],
             'start': self.get_now(),
-            'projectId': self.__project_id
+            'projectId': last_time_entry['projectId']
         }
         response = requests.post(f"{self.__base_workspace_url}/time-entries", json=payload, headers=self.__headers)
         if response.status_code == 201:
@@ -255,14 +282,14 @@ class ItemEventListener(EventListener):
             return self.notification_action('Unexpected error', f"HTTP {e}", 'error')
 
         try:
-            (description, tag_ids) = self.process_message(message)
+            (description, tag_ids, project_id) = self.process_message(message)
         except RuntimeError as e:
             return self.notification_action('Unexpected error', f"{e}", 'error')
 
         payload = {
             'description': description,
             'tagIds': tag_ids,
-            'projectId': self.__project_id,
+            'projectId': project_id if project_id != None else time_entry['projectId'],
             'start': time_entry['timeInterval']['start'],
             'end': self.get_now(),
         }
